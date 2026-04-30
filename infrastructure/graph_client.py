@@ -1,0 +1,129 @@
+import logging
+
+import msal
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import (
+    Retry,
+)
+
+
+class GraphApiClient:
+    """Microsoft Graph APIへのアクセスを担当するクラス"""
+
+    def __init__(self, tenant_id: str, client_id: str, client_secret: str):
+        self.client_id = client_id
+        self.authority = f"https://login.microsoftonline.com/{tenant_id}"
+        self.scopes = ["https://graph.microsoft.com/.default"]
+
+        # MSALの機密クライアントアプリケーションを初期化
+        self.app = msal.ConfidentialClientApplication(
+            self.client_id, authority=self.authority, client_credential=client_secret
+        )
+
+        # --- HTTPセッションと自動リトライの設定を追加 ---
+        self.session = requests.Session()
+
+        # 429(レート制限), 500, 502, 503, 504エラー時に自動リトライ
+        # backoff_factor=1 の場合: 0s, 2s, 4s, 8s, 16s... と待機時間が増加
+        # ※ 429エラー時にRetry-Afterヘッダーがあれば、それを優先して待機してくれます
+        retries = Retry(
+            total=5,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=[
+                "HEAD",
+                "GET",
+                "OPTIONS",
+                "POST",
+            ],
+        )
+        adapter = HTTPAdapter(max_retries=retries)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
+
+    def _get_access_token(self) -> str:
+        """MSALを使用してアクセストークンを取得する"""
+        # キャッシュからトークンを取得
+        result = self.app.acquire_token_for_client(scopes=self.scopes)
+
+        if "access_token" in result:
+            return result["access_token"]
+        else:
+            error_desc = result.get("error_description", "Unknown error")
+            logging.error(f"Failed to acquire token: {error_desc}")
+            raise Exception(f"Authentication failed: {error_desc}")
+
+    def _get_headers(self) -> dict:
+        """APIリクエスト用の共通ヘッダーを生成する"""
+        token = self._get_access_token()
+        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    def start_search_job(self, start_time: str, end_time: str) -> str:
+        """検索ジョブを開始し、Job IDを返す"""
+        logging.info(f"Graph API: Starting search from {start_time} to {end_time}")
+
+        # 監査ログ検索用エンドポイント
+        url = "https://graph.microsoft.com/beta/security/auditLog/queries"
+        headers = self._get_headers()
+
+        # 検索条件
+        payload = {"filterStartDateTime": start_time, "filterEndDateTime": end_time}
+
+        # POSTリクエスト
+        response = self.session.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+
+        return response.json().get("id")
+
+    def get_job_status(self, job_id: str) -> str:
+        """ジョブのステータスを取得する"""
+        logging.info(f"Graph API: Checking status for {job_id}")
+
+        # ステータス取得用エンドポイント
+        url = f"https://graph.microsoft.com/beta/security/auditLog/queries/{job_id}"
+        headers = self._get_headers()
+
+        # GETリクエスト
+        response = self.session.get(url, headers=headers)
+        response.raise_for_status()
+
+        return response.json().get("status")
+
+    def fetch_logs(self, job_id: str) -> dict:
+        """完了したジョブからログを取得する"""
+        logging.info(f"Graph API: Fetching logs for {job_id}")
+
+        # ログ取得用エンドポイント
+        base_url = f"https://graph.microsoft.com/beta/security/auditLog/queries/{job_id}/records"
+        headers = self._get_headers()
+
+        all_records = []
+        next_link = base_url
+
+        # next_link が存在する限りループしてデータを取得
+        while next_link:
+            logging.info(f"Fetching data from: {next_link}")
+
+            response = self.session.get(next_link, headers=headers)
+            response.raise_for_status()
+
+            data = response.json()
+
+            # 取得した "value" 配列の中身を取り出して、all_recordsに結合（extend）
+            if "value" in data and isinstance(data["value"], list):
+                all_records.extend(data["value"])
+
+            # 次のページのURLを取得。存在しない場合（最後のページ）は None になるためループを抜ける
+            next_link = data.get("@odata.nextLink")
+
+        logging.info(
+            f"Graph API: Successfully fetched {len(all_records)} records for job {job_id}"
+        )
+
+        # 後続の保存処理に渡しやすいよう、1つのJSON（辞書）にまとめて返す
+        return {
+            "job_id": job_id,
+            "total_records": len(all_records),
+            "value": all_records,
+        }

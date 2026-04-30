@@ -1,0 +1,1 @@
+https://learn.microsoft.com/ja-jp/graph/api/security-auditcoreroot-post-auditlogqueries?view=graph-rest-beta&tabs=http
