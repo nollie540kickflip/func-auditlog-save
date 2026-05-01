@@ -97,6 +97,8 @@ class GraphApiClient:
         response = self.session.get(url, headers=headers)
         response.raise_for_status()
 
+        logging.info(f"Job {job_id} status: {response.json().get('status')}")
+
         return response.json().get("status")
 
     def fetch_logs_pages(self, job_id: str):
