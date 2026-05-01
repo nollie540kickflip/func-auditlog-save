@@ -46,6 +46,9 @@ class BlobStorageClient:
         リスト内の辞書データを JSON Lines (JSONL) 形式に変換し、
         Append Blob に追記する。巨大ログのストリーミング保存に最適。
         """
+        logging.info(
+            f"Appending {len(records)} records to blob '{blob_name}' in container '{self.container_name}'..."
+        )
         try:
             # AppendBlobClientを取得
             append_blob_client = self.blob_service_client.get_append_blob_client(
