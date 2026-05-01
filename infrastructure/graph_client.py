@@ -25,11 +25,11 @@ class GraphApiClient:
         self.session = requests.Session()
 
         # 429(レート制限), 500, 502, 503, 504エラー時に自動リトライ
-        # backoff_factor=1 の場合: 0s, 2s, 4s, 8s, 16s... と待機時間が増加
+        # backoff_factor=2 の場合: 2s, 4s, 8s, 16s, 32s... と待機時間が増加
         # ※ 429エラー時にRetry-Afterヘッダーがあれば、それを優先して待機してくれます
         retries = Retry(
-            total=5,
-            backoff_factor=1,
+            total=10,
+            backoff_factor=2,
             status_forcelist=[429, 500, 502, 503, 504],
             allowed_methods=[
                 "HEAD",
