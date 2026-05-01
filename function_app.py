@@ -52,7 +52,7 @@ async def http_starter(
 def main_orchestrator(context: df.DurableOrchestrationContext):
     target_date_str = context.get_input()
     target_date = datetime.strptime(target_date_str, "%Y-%m-%d")
-    tasks = []
+    results = []
 
     for i in range(24):
         start_time = target_date + timedelta(hours=i)
@@ -60,12 +60,22 @@ def main_orchestrator(context: df.DurableOrchestrationContext):
             "start": start_time.isoformat() + "Z",
             "end": (start_time + timedelta(hours=1)).isoformat() + "Z",
         }
-        tasks.append(
-            context.call_sub_orchestrator("job_lifecycle_sub_orchestrator", time_window)
-        )
 
-    results = yield context.task_all(tasks)
-    return f"Completed. {len(results)} jobs processed."
+        # forループの中で1つずつyieldして完了を待つ (直列実行)
+        result = yield context.call_sub_orchestrator(
+            "job_lifecycle_sub_orchestrator", time_window
+        )
+        results.append(result)
+
+        if i < 23:  # 最後のジョブの後は待つ必要がないためスキップ
+            # 例: ジョブとジョブの間に30秒のインターバルを設ける (必要に応じて調整してください)
+            delay_minutes = 5
+            next_start_time = context.current_utc_datetime + timedelta(
+                minutes=delay_minutes
+            )
+            yield context.create_timer(next_start_time)
+
+    return f"Completed. {len(results)} jobs processed sequentially."
 
 
 # --- Sub Orchestrator ---
