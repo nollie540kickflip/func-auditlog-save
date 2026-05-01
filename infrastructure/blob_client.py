@@ -8,6 +8,7 @@ class BlobStorageClient:
     """Azure Blob Storageへのアクセスを担当するクラス"""
 
     def __init__(self, connection_string: str, container_name: str):
+        logging.info("Initializing BlobStorageClient...")
         if not connection_string:
             raise ValueError(
                 "Blob Storageの接続文字列(connection_string)が設定されていません。"
