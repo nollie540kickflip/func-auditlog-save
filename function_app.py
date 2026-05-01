@@ -68,7 +68,6 @@ def main_orchestrator(context: df.DurableOrchestrationContext):
         results.append(result)
 
         if i < 23:  # 最後のジョブの後は待つ必要がないためスキップ
-            # 例: ジョブとジョブの間に30秒のインターバルを設ける (必要に応じて調整してください)
             delay_minutes = 5
             next_start_time = context.current_utc_datetime + timedelta(
                 minutes=delay_minutes
