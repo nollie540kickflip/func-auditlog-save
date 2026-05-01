@@ -129,6 +129,9 @@ class GraphApiClient:
                 )
 
             data = response.json()
+            logging.info(
+                f"Page {page_count} fetched with {len(data.get('value', []))} records."
+            )
             records = data.get("value", [])
 
             if records:
