@@ -3,6 +3,7 @@ import logging
 import msal
 import requests
 from requests.adapters import HTTPAdapter
+from requests.exceptions import HTTPError, RetryError
 from urllib3.util.retry import (
     Retry,
 )
@@ -70,11 +71,19 @@ class GraphApiClient:
         # 検索条件
         payload = {"filterStartDateTime": start_time, "filterEndDateTime": end_time}
 
-        # POSTリクエスト
-        response = self.session.post(url, headers=headers, json=payload)
-        response.raise_for_status()
-
-        return response.json().get("id")
+        try:
+            response = self.session.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            return response.json().get("id")
+        except RetryError as e:
+            # HTTPセッションのリトライ上限に達した場合
+            logging.error(f"Graph API HTTP Retry Limit Exceeded: {e}")
+            raise Exception(
+                "Graph API Rate Limit (429) persists. Need orchestrator retry."
+            )
+        except HTTPError as e:
+            logging.error(f"Graph API HTTP Error: {e}")
+            raise
 
     def get_job_status(self, job_id: str) -> str:
         """ジョブのステータスを取得する"""
@@ -106,8 +115,16 @@ class GraphApiClient:
         while next_link:
             logging.info(f"Fetching page {page_count} from: {next_link}")
 
-            response = self.session.get(next_link, headers=headers)
-            response.raise_for_status()
+            try:
+                response = self.session.get(next_link, headers=headers)
+                response.raise_for_status()
+            except RetryError as e:
+                logging.error(
+                    f"Graph API HTTP Retry Limit Exceeded on page {page_count}: {e}"
+                )
+                raise Exception(
+                    f"Failed to fetch page {page_count} due to persistent 429 errors."
+                )
 
             data = response.json()
             records = data.get("value", [])
