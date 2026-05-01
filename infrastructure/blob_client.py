@@ -78,3 +78,38 @@ class BlobStorageClient:
         except Exception as e:
             logging.error(f"Blob Storage: Failed to save '{blob_name}'. Error: {e}")
             raise  # 例外を再スローしてDurable Functions側に失敗を検知させる
+
+    def append_jsonl(self, blob_name: str, records: list) -> None:
+        """
+        リスト内の辞書データを JSON Lines (JSONL) 形式に変換し、
+        Append Blob に追記する。巨大ログのストリーミング保存に最適。
+        """
+        try:
+            # AppendBlobClientを取得
+            append_blob_client = self.blob_service_client.get_append_blob_client(
+                container=self.container_name, blob=blob_name
+            )
+
+            # 初回のみBlobを作成 (存在しない場合のみ)
+            if not append_blob_client.exists():
+                content_settings = ContentSettings(content_type="application/jsonl")
+                append_blob_client.create_append_blob(content_settings=content_settings)
+                logging.info(f"Blob Storage: Created new Append Blob '{blob_name}'.")
+
+            # リスト内の各レコードを1行のJSON文字列に変換 (改行区切り)
+            jsonl_data = ""
+            for record in records:
+                jsonl_data += json.dumps(record, ensure_ascii=False) + "\n"
+
+            # 追記実行
+            if jsonl_data:
+                append_blob_client.append_block(jsonl_data.encode("utf-8"))
+                logging.info(
+                    f"Blob Storage: Appended {len(records)} records to '{blob_name}'."
+                )
+
+        except Exception as e:
+            logging.error(
+                f"Blob Storage: Failed to append to '{blob_name}'. Error: {e}"
+            )
+            raise

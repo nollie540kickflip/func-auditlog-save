@@ -26,11 +26,22 @@ blob_client = BlobStorageClient(
 async def http_starter(
     req: func.HttpRequest, client: df.DurableOrchestrationClient
 ) -> func.HttpResponse:
+    # クエリパラメータから対象日付を取得 (例: ?date=2026-05-01)
     target_date_str = req.params.get("date")
+
+    # クエリパラメータに日付がない場合は、リクエストボディから取得を試みる
+    if not target_date_str:
+        try:
+            req_body = req.get_json()
+            target_date_str = req_body.get("date")
+        except ValueError:
+            # JSON形式ではない、またはボディが空の場合は何もしない
+            pass
 
     if not target_date_str:
         return func.HttpResponse(
-            "Please pass a 'date' parameter (YYYY-MM-DD)", status_code=400
+            "Please provide a target date in 'YYYY-MM-DD' format via query parameter or JSON body.",
+            status_code=400,
         )
 
     instance_id = await client.start_new("main_orchestrator", None, target_date_str)
@@ -93,19 +104,16 @@ def job_lifecycle_sub_orchestrator(context: df.DurableOrchestrationContext):
         )
         yield context.create_timer(next_check)
 
-    # ログ取得
-    log_data = yield context.call_activity_with_retry(
-        "fetch_logs_activity", retry_options, job_id
+    # ログの取得とBlobへの追記保存
+    fetch_and_save_params = {
+        "job_id": job_id,
+        "blob_name": f"audit_logs_{time_window['start'].replace(':', '')}.jsonl",
+    }
+    result_msg = yield context.call_activity_with_retry(
+        "fetch_and_save_logs_activity", retry_options, fetch_and_save_params
     )
 
-    # Blob保存
-    blob_params = {
-        "blob_name": f"audit_logs_{time_window['start'].replace(':', '')}.json",
-        "log_data": log_data,
-    }
-    yield context.call_activity("save_to_blob_activity", blob_params)
-
-    return f"Success for window {time_window['start']}"
+    return f"Success for window {time_window['start']}. {result_msg}"
 
 
 # --- Activity Functions ---
@@ -119,12 +127,18 @@ def check_job_status_activity(jobId: str) -> str:
     return graph_client.get_job_status(jobId)
 
 
-@myApp.activity_trigger(input_name="jobId")
-def fetch_logs_activity(jobId: str) -> dict:
-    return graph_client.fetch_logs(jobId)
+@myApp.activity_trigger(input_name="params")
+def fetch_and_save_logs_activity(params: dict) -> str:
+    job_id = params["job_id"]
+    blob_name = params["blob_name"]
 
+    total_records = 0
 
-@myApp.activity_trigger(input_name="blobParams")
-def save_to_blob_activity(blobParams: dict) -> str:
-    blob_client.save_json(blobParams["blob_name"], blobParams["log_data"])
-    return blobParams["blob_name"]
+    # Graph APIからジェネレータで1ページ(複数レコード)ずつ取得
+    for page_records in graph_client.fetch_logs_pages(job_id):
+        if page_records:
+            # 取得した1ページ分を即座にBlobへ追記
+            blob_client.append_jsonl(blob_name, page_records)
+            total_records += len(page_records)
+
+    return f"Saved total {total_records} records to {blob_name}"

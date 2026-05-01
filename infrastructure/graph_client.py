@@ -90,40 +90,30 @@ class GraphApiClient:
 
         return response.json().get("status")
 
-    def fetch_logs(self, job_id: str) -> dict:
-        """完了したジョブからログを取得する"""
-        logging.info(f"Graph API: Fetching logs for {job_id}")
+    def fetch_logs_pages(self, job_id: str):
+        """
+        完了したジョブからログをページ単位で取得するジェネレータ。
+        大量データをメモリに溜め込まず、1ページ(value配列)ごとに yield で返す。
+        """
+        logging.info(f"Graph API: Fetching logs for {job_id} (Paging mode)")
 
         # ログ取得用エンドポイント
         base_url = f"https://graph.microsoft.com/beta/security/auditLog/queries/{job_id}/records"
         headers = self._get_headers()
-
-        all_records = []
         next_link = base_url
 
-        # next_link が存在する限りループしてデータを取得
+        page_count = 1
         while next_link:
-            logging.info(f"Fetching data from: {next_link}")
+            logging.info(f"Fetching page {page_count} from: {next_link}")
 
             response = self.session.get(next_link, headers=headers)
             response.raise_for_status()
 
             data = response.json()
+            records = data.get("value", [])
 
-            # 取得した "value" 配列の中身を取り出して、all_recordsに結合（extend）
-            if "value" in data and isinstance(data["value"], list):
-                all_records.extend(data["value"])
+            if records:
+                yield records
 
-            # 次のページのURLを取得。存在しない場合（最後のページ）は None になるためループを抜ける
             next_link = data.get("@odata.nextLink")
-
-        logging.info(
-            f"Graph API: Successfully fetched {len(all_records)} records for job {job_id}"
-        )
-
-        # 後続の保存処理に渡しやすいよう、1つのJSON（辞書）にまとめて返す
-        return {
-            "job_id": job_id,
-            "total_records": len(all_records),
-            "value": all_records,
-        }
+            page_count += 1
