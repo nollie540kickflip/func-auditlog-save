@@ -50,15 +50,16 @@ class BlobStorageClient:
             f"Appending {len(records)} records to blob '{blob_name}' in container '{self.container_name}'..."
         )
         try:
-            # AppendBlobClientを取得
-            append_blob_client = self.blob_service_client.get_append_blob_client(
+            # 汎用クライアントを取得
+            blob_client = self.blob_service_client.get_blob_client(
                 container=self.container_name, blob=blob_name
             )
 
             # 初回のみBlobを作成 (存在しない場合のみ)
-            if not append_blob_client.exists():
+            if not blob_client.exists():
                 content_settings = ContentSettings(content_type="application/jsonl")
-                append_blob_client.create_append_blob(content_settings=content_settings)
+                # create_append_blob で明示的に Append Blob として初期化する
+                blob_client.create_append_blob(content_settings=content_settings)
                 logging.info(f"Blob Storage: Created new Append Blob '{blob_name}'.")
 
             # リスト内の各レコードを1行のJSON文字列に変換 (改行区切り)
@@ -68,7 +69,7 @@ class BlobStorageClient:
 
             # 追記実行
             if jsonl_data:
-                append_blob_client.append_block(jsonl_data.encode("utf-8"))
+                blob_client.append_block(jsonl_data.encode("utf-8"))
                 logging.info(
                     f"Blob Storage: Appended {len(records)} records to '{blob_name}'."
                 )
