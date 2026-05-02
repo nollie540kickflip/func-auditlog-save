@@ -68,7 +68,7 @@ def main_orchestrator(context: df.DurableOrchestrationContext):
         results.append(result)
 
         if i < 23:  # 最後のジョブの後は待つ必要がないためスキップ
-            delay_minutes = 5
+            delay_minutes = 3
             next_start_time = context.current_utc_datetime + timedelta(
                 minutes=delay_minutes
             )
