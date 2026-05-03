@@ -3,6 +3,7 @@ from datetime import datetime, timedelta, timezone
 
 import azure.durable_functions as df
 import azure.functions as func
+import duckdb
 
 from config import config
 from infrastructure.blob_client import BlobStorageClient
@@ -79,7 +80,16 @@ def main_orchestrator(context: df.DurableOrchestrationContext):
             )
             yield context.create_timer(next_start_time)
 
-    return f"Completed. {len(results)} jobs processed sequentially."
+    # --- リトライポリシーの定義 ---
+    retry_options = df.RetryOptions(
+        first_retry_interval_in_milliseconds=10000, max_number_of_attempts=3
+    )
+
+    # 変換アクティビティの呼び出し
+    conversion_result = yield context.call_activity_with_retry(
+        "convert_jsonl_to_parquet_activity", retry_options, target_date_str
+    )
+    return f"Completed. {len(results)} jobs processed. {conversion_result}"
 
 
 # --- Sub Orchestrator ---
@@ -88,9 +98,8 @@ def job_lifecycle_sub_orchestrator(context: df.DurableOrchestrationContext):
     time_window = context.get_input()
 
     # --- リトライポリシーの定義 ---
-    # 初回は5秒後、最大3回まで再試行する設定
     retry_options = df.RetryOptions(
-        first_retry_interval_in_milliseconds=5000, max_number_of_attempts=3
+        first_retry_interval_in_milliseconds=10000, max_number_of_attempts=3
     )
 
     # 検索ジョブの実行
@@ -119,10 +128,12 @@ def job_lifecycle_sub_orchestrator(context: df.DurableOrchestrationContext):
         yield context.create_timer(next_check)
 
     # ログの取得とBlobへの追記保存
-    fetch_and_save_params = {
-        "job_id": job_id,
-        "blob_name": f"audit_logs_{time_window['start'].replace(':', '')}.jsonl",
-    }
+    target_date_str = time_window["start"].split("T")[0]
+    year, month, day = target_date_str.split("-")
+
+    blob_name = f"year={year}/month={month}/day={day}/audit_logs.jsonl"
+
+    fetch_and_save_params = {"job_id": job_id, "blob_name": blob_name}
     result_msg = yield context.call_activity_with_retry(
         "fetch_and_save_logs_activity", retry_options, fetch_and_save_params
     )
@@ -168,3 +179,51 @@ def fetch_and_save_logs_activity(params: dict) -> str:
         blob_client.append_jsonl(blob_name, buffer)
 
     return f"Saved total {total_records} records to {blob_name} (in chunks of {BUFFER_LIMIT})"
+
+
+@myApp.activity_trigger(input_name="targetDateStr")
+def convert_jsonl_to_parquet_activity(targetDateStr: str) -> str:
+    """JSONLファイルを読み込み、Hiveパーティション形式のParquetとして保存する"""
+
+    # config.py から設定値を取得[cite: 1]
+    container = config.blob_container_name
+    conn_str = config.blob_connection_string
+
+    year, month, day = targetDateStr.split("-")
+
+    # 読み込み元のJSONLパス
+    jsonl_blob_path = (
+        f"azure://{container}/year={year}/month={month}/day={day}/audit_logs.jsonl"
+    )
+    # 保存先のParquetパス
+    parquet_blob_path = (
+        f"azure://{container}/year={year}/month={month}/day={day}/audit_logs.parquet"
+    )
+
+    # DuckDBのインメモリインスタンスを作成
+    con = duckdb.connect()
+
+    try:
+        # Azure拡張機能のインストールとロード
+        con.execute("INSTALL azure;")
+        con.execute("LOAD azure;")
+
+        # 接続文字列を使ったシークレットの作成
+        con.execute(f"""
+            CREATE SECRET azure_storage (
+                TYPE AZURE,
+                CONNECTION_STRING '{conn_str}'
+            );
+        """)
+
+        # COPY文で JSONL -> Parquet への変換とBlobへの書き出しをメモリ上でストリーミング実行
+        con.execute(f"""
+            COPY (SELECT * FROM read_json_auto('{jsonl_blob_path}')) 
+            TO '{parquet_blob_path}' (FORMAT PARQUET);
+        """)
+
+        return f"Converted to Parquet: {parquet_blob_path}"
+
+    finally:
+        # メモリ解放のために明示的にクローズ
+        con.close()
