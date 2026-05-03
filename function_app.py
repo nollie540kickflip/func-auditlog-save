@@ -59,9 +59,11 @@ def main_orchestrator(context: df.DurableOrchestrationContext):
 
     for i in range(24):
         start_time = target_date + timedelta(hours=i)
+        end_time = start_time + timedelta(hours=1) - timedelta(milliseconds=1)
+
         time_window = {
             "start": start_time.isoformat() + "Z",
-            "end": (start_time + timedelta(hours=1)).isoformat() + "Z",
+            "end": end_time.isoformat() + "Z",
         }
 
         # forループの中で1つずつyieldして完了を待つ (直列実行)
