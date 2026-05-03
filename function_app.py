@@ -142,12 +142,24 @@ def fetch_and_save_logs_activity(params: dict) -> str:
     blob_name = params["blob_name"]
 
     total_records = 0
+    buffer = []
+    BUFFER_LIMIT = 1000
 
     # Graph APIからジェネレータで1ページ(複数レコード)ずつ取得
     for page_records in graph_client.fetch_logs_pages(job_id):
         if page_records:
-            # 取得した1ページ分を即座にBlobへ追記
-            blob_client.append_jsonl(blob_name, page_records)
+            buffer.extend(page_records)
             total_records += len(page_records)
 
-    return f"Saved total {total_records} records to {blob_name}"
+            # バッファが1000件以上になったら、1000件ずつ切り出して書き込み
+            while len(buffer) >= BUFFER_LIMIT:
+                chunk_to_write = buffer[:BUFFER_LIMIT]
+                blob_client.append_jsonl(blob_name, chunk_to_write)
+                # 書き込んだ分をバッファから削除
+                buffer = buffer[BUFFER_LIMIT:]
+
+    # ループ終了後、バッファに残っている端数のレコードを書き込み
+    if buffer:
+        blob_client.append_jsonl(blob_name, buffer)
+
+    return f"Saved total {total_records} records to {blob_name} (in chunks of {BUFFER_LIMIT})"
