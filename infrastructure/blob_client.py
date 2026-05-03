@@ -1,5 +1,6 @@
 import json
 import logging
+import zlib
 
 from azure.storage.blob import BlobServiceClient, ContentSettings
 
@@ -78,4 +79,59 @@ class BlobStorageClient:
             logging.error(
                 f"Blob Storage: Failed to append to '{blob_name}'. Error: {e}"
             )
+            raise
+
+    def compress_blob_to_gzip(
+        self, source_blob_name: str, dest_blob_name: str, delete_source: bool = True
+    ) -> None:
+        """
+        指定されたBlobをストリーミングで読み込み、
+        オンザフライでgzip圧縮して別のBlobとして保存する。
+        """
+        logging.info(
+            f"Blob Storage: Starting streaming compression from '{source_blob_name}' to '{dest_blob_name}'..."
+        )
+
+        source_client = self.blob_service_client.get_blob_client(
+            container=self.container_name, blob=source_blob_name
+        )
+        dest_client = self.blob_service_client.get_blob_client(
+            container=self.container_name, blob=dest_blob_name
+        )
+
+        if not source_client.exists():
+            error_msg = f"Source blob '{source_blob_name}' does not exist."
+            logging.warning(f"Blob Storage: {error_msg}")
+            raise FileNotFoundError(error_msg)
+
+        # --- ストリーミング圧縮用のジェネレータ ---
+        def generate_compressed_chunks(stream):
+            compressor = zlib.compressobj(level=9, wbits=31)
+            for chunk in stream.chunks():
+                compressed_chunk = compressor.compress(chunk)
+                if compressed_chunk:
+                    yield compressed_chunk
+            yield compressor.flush()
+
+        try:
+            # 1. ダウンロードストリームの取得 (メモリには展開されない)
+            download_stream = source_client.download_blob()
+
+            # 2. ジェネレータを渡してストリーミングアップロード
+            dest_client.upload_blob(
+                generate_compressed_chunks(download_stream),
+                blob_type="BlockBlob",
+                overwrite=True,
+            )
+            logging.info(
+                f"Blob Storage: Successfully compressed to '{dest_blob_name}'."
+            )
+
+            # 3. 元ファイルの削除
+            if delete_source:
+                source_client.delete_blob()
+                logging.info(f"Blob Storage: Deleted source blob '{source_blob_name}'.")
+
+        except Exception as e:
+            logging.error(f"Blob Storage: Compression failed. Error: {e}")
             raise

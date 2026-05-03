@@ -84,11 +84,11 @@ def main_orchestrator(context: df.DurableOrchestrationContext):
         first_retry_interval_in_milliseconds=10000, max_number_of_attempts=3
     )
 
-    # 変換アクティビティの呼び出し
-    conversion_result = yield context.call_activity_with_retry(
-        "convert_jsonl_to_parquet_activity", retry_options, target_date_str
+    # 圧縮アクティビティの呼び出し
+    compression_result = yield context.call_activity_with_retry(
+        "compress_jsonl_activity", retry_options, target_date_str
     )
-    return f"Completed. {len(results)} jobs processed. {conversion_result}"
+    return f"Completed. {len(results)} jobs processed. {compression_result}"
 
 
 # --- Sub Orchestrator ---
@@ -181,49 +181,21 @@ def fetch_and_save_logs_activity(params: dict) -> str:
 
 
 @myApp.activity_trigger(input_name="targetDateStr")
-def convert_jsonl_to_parquet_activity(targetDateStr: str) -> str:
-    """JSONLファイルを読み込み、Hiveパーティション形式のParquetとして保存する"""
-    import duckdb
-
-    # config.py から設定値を取得[cite: 1]
-    container = config.blob_container_name
-    conn_str = config.blob_connection_string
-
+def compress_jsonl_activity(targetDateStr: str) -> str:
+    """JSONLファイルをgzip圧縮する"""
     year, month, day = targetDateStr.split("-")
 
-    # 読み込み元のJSONLパス
-    jsonl_blob_path = (
-        f"azure://{container}/year={year}/month={month}/day={day}/audit_logs.jsonl"
-    )
-    # 保存先のParquetパス
-    parquet_blob_path = (
-        f"azure://{container}/year={year}/month={month}/day={day}/audit_logs.parquet"
-    )
-
-    # DuckDBのインメモリインスタンスを作成
-    con = duckdb.connect()
+    blob_name = f"year={year}/month={month}/day={day}/audit_logs.jsonl"
+    gz_blob_name = f"{blob_name}.gz"
 
     try:
-        # Azure拡張機能のインストールとロード
-        con.execute("INSTALL azure;")
-        con.execute("LOAD azure;")
+        blob_client.compress_blob_to_gzip(
+            source_blob_name=blob_name, dest_blob_name=gz_blob_name, delete_source=True
+        )
+        return f"Stream-compressed to {gz_blob_name} and deleted original JSONL."
 
-        # 接続文字列を使ったシークレットの作成
-        con.execute(f"""
-            CREATE SECRET azure_storage (
-                TYPE AZURE,
-                CONNECTION_STRING '{conn_str}'
-            );
-        """)
-
-        # COPY文で JSONL -> Parquet への変換とBlobへの書き出しをメモリ上でストリーミング実行
-        con.execute(f"""
-            COPY (SELECT * FROM read_json_auto('{jsonl_blob_path}')) 
-            TO '{parquet_blob_path}' (FORMAT PARQUET);
-        """)
-
-        return f"Converted to Parquet: {parquet_blob_path}"
-
-    finally:
-        # メモリ解放のために明示的にクローズ
-        con.close()
+    except FileNotFoundError as e:
+        return str(e)
+    except Exception as e:
+        # Durable Functionsでリトライさせるために例外を再送出
+        raise Exception(f"Compression activity failed: {e}")
