@@ -8,7 +8,7 @@ aiosignal==1.4.0
     # via aiohttp
 attrs==26.1.0
     # via aiohttp
-azure-core==1.40.0
+azure-core==1.39.0
     # via azure-storage-blob
 azure-functions==2.1.0
     # via
@@ -29,6 +29,8 @@ cryptography==47.0.0
     #   azure-storage-blob
     #   msal
     #   pyjwt
+duckdb==1.5.2
+    # via func-auditlog-save (pyproject.toml)
 frozenlist==1.8.0
     # via
     #   aiohttp
