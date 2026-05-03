@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta
+import logging
+from datetime import datetime, timedelta, timezone
 
 import azure.durable_functions as df
 import azure.functions as func
@@ -20,32 +21,34 @@ blob_client = BlobStorageClient(
 )
 
 
-# --- HTTP Starter & Main Orchestrator ---
-@myApp.route(route="start_audit_sync")
+# --- Timer Starter & Main Orchestrator ---
+@myApp.timer_trigger(
+    schedule="0 0 1 * * *", arg_name="myTimer", run_on_startup=False, use_monitor=False
+)
 @myApp.durable_client_input(client_name="client")
-async def http_starter(
-    req: func.HttpRequest, client: df.DurableOrchestrationClient
-) -> func.HttpResponse:
-    # クエリパラメータから対象日付を取得 (例: ?date=2026-05-01)
-    target_date_str = req.params.get("date")
+async def timer_starter(
+    myTimer: func.TimerRequest, client: df.DurableOrchestrationClient
+) -> None:
+    """
+    毎日午前1時(UTC)に起動し、前日1日分のログ同期を開始する
+    (CRON式の例: 0 0 1 * * * -> 毎日UTC午前1時)
+    """
+    # タイムトリガー実行時のUTC日時を取得
+    now_utc = datetime.now(timezone.utc)
 
-    # クエリパラメータに日付がない場合は、リクエストボディから取得を試みる
-    if not target_date_str:
-        try:
-            req_body = req.get_json()
-            target_date_str = req_body.get("date")
-        except ValueError:
-            # JSON形式ではない、またはボディが空の場合は何もしない
-            pass
+    # 前日の日付を計算 (1日マイナス)
+    yesterday = now_utc - timedelta(days=1)
 
-    if not target_date_str:
-        return func.HttpResponse(
-            "Please provide a target date in 'YYYY-MM-DD' format via query parameter or JSON body.",
-            status_code=400,
-        )
+    # 'YYYY-MM-DD' 形式の文字列に変換
+    target_date_str = yesterday.strftime("%Y-%m-%d")
 
+    # Orchestratorを起動
     instance_id = await client.start_new("main_orchestrator", None, target_date_str)
-    return client.create_check_status_response(req, instance_id)
+
+    # ログ出力 (func.TimerRequest では返り値が不要なため、ログのみ残す)
+    logging.info(
+        f"Timer triggered at {now_utc.isoformat()}. Started main_orchestrator for target date: {target_date_str}. Instance ID = '{instance_id}'."
+    )
 
 
 @myApp.orchestration_trigger(context_name="context")
