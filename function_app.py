@@ -3,7 +3,6 @@ from datetime import datetime, timedelta, timezone
 
 import azure.durable_functions as df
 import azure.functions as func
-import duckdb
 
 from config import config
 from infrastructure.blob_client import BlobStorageClient
@@ -184,6 +183,7 @@ def fetch_and_save_logs_activity(params: dict) -> str:
 @myApp.activity_trigger(input_name="targetDateStr")
 def convert_jsonl_to_parquet_activity(targetDateStr: str) -> str:
     """JSONLファイルを読み込み、Hiveパーティション形式のParquetとして保存する"""
+    import duckdb
 
     # config.py から設定値を取得[cite: 1]
     container = config.blob_container_name
